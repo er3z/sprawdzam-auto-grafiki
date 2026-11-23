@@ -1,15 +1,20 @@
-"""Rolka 1080x1920 MP4 (ok. 15 s) z animowanym tytułem i 3 faktami, z własną ścieżką dźwiękową.
+"""Rolka 1080x1920 MP4 z 3 faktami i własną ścieżką dźwiękową.
 
 Użycie: python3 tools/reel.py spec.json
 spec.json:
 {
   "label": "Premiera",
+  "hook": "Ta usterka kosztuje 8 tys. zł",
   "title": "Chwytliwy tytuł, 25-60 znaków",
   "facts": ["Fakt 1 (krótko)", "Fakt 2", "Fakt 3"],
   "source": "Motor1, Autocar",
   "out": "posts/2026-11-20-rolka-slug.mp4"
 }
-Tworzy też okładkę <out bez .mp4>-cover.jpg.
+Z polem "hook" (zalecane, od 23.11.2026): krótka rolka ok. 9 s. Hak (do ok. 45 znaków,
+konkret: liczba, model, koszt) jest widoczny dużym tekstem od pierwszej klatki, bez logo,
+potem 3 fakty po 2,2 s (każdy do ok. 55 znaków) i 1 s zakończenia. Pole "title" jest wtedy
+pomijane. Bez "hook": stary format ok. 15 s z animowanym tytułem.
+Tworzy też okładkę <out bez .mp4>-cover.jpg (w trybie hook: klatka z hakiem).
 """
 import json
 import math
@@ -41,6 +46,20 @@ def base(spec):
     return im
 
 
+def hook_frame(spec, t):
+    """Hak widoczny w całości od pierwszej klatki (bez animacji wejścia i bez logo)."""
+    im, d = canvas(W, H)
+    label(d, M, 170, spec.get("label", "Nowość"), size=34)
+    ft, lines, lh = fit(d, spec["hook"], W - 2 * M, 4, 176, 96)
+    y0 = (H - lh * len(lines)) // 2 - 60
+    for i, ln in enumerate(lines):
+        d.text((M, y0 + i * lh), ln, font=ft, fill=INK)
+    yb = y0 + lh * len(lines) + 40
+    grow = ease(t / 0.6)
+    d.rectangle([M, yb, M + 160 + int(200 * grow), yb + 14], fill=ACC)
+    return im
+
+
 def title_frame(bg, spec, t):
     im = bg.copy()
     d = ImageDraw.Draw(im)
@@ -60,10 +79,10 @@ def title_frame(bg, spec, t):
     return im
 
 
-def fact_frame(bg, spec, k, t):
+def fact_frame(bg, spec, k, t, anim=0.45):
     im = bg.copy()
     d = ImageDraw.Draw(im)
-    p = ease(t / 0.45)
+    p = ease(t / anim)
     num = rob(260, 800, 80)
     d.text((M, 420 - int((1 - p) * 60)), f"{k + 1}", font=num, fill=ACC)
     ft, lines, lh = fit(d, spec["facts"][k], W - 2 * M, 6, 104, 60)
@@ -71,7 +90,7 @@ def fact_frame(bg, spec, k, t):
     layer = Image.new("RGBA", im.size, (0, 0, 0, 0))
     ld = ImageDraw.Draw(layer)
     for i, ln in enumerate(lines):
-        q = ease((t - 0.1 - i * 0.08) / 0.45)
+        q = ease((t - 0.1 * anim / 0.45 - i * 0.08 * anim / 0.45) / anim)
         ld.text((M, y + i * lh + int((1 - q) * 40)), ln, font=ft, fill=INK + (int(255 * q),))
     im.paste(layer, (0, 0), layer)
     # pasek postepu
@@ -127,13 +146,18 @@ def main(path):
     spec = json.load(open(path, encoding="utf-8"))
     assert 2 <= len(spec["facts"]) <= 4
     bg = base(spec)
+    short = bool(spec.get("hook"))
+    if short:
+        t_first, t_fact, t_end, anim = 1.8, 2.2, 1.0, 0.25
+    else:
+        t_first, t_fact, t_end, anim = T_TITLE, T_FACT, T_END, 0.45
     frames = []
-    for i in range(int(T_TITLE * FPS)):
-        frames.append(("t", None, i / FPS))
+    for i in range(int(t_first * FPS)):
+        frames.append(("h" if short else "t", None, i / FPS))
     for k in range(len(spec["facts"])):
-        for i in range(int(T_FACT * FPS)):
+        for i in range(int(t_fact * FPS)):
             frames.append(("f", k, i / FPS))
-    for i in range(int(T_END * FPS)):
+    for i in range(int(t_end * FPS)):
         frames.append(("e", None, i / FPS))
     dur = len(frames) / FPS
     out = spec["out"]
@@ -146,12 +170,16 @@ def main(path):
         pr = subprocess.Popen(cmd, stdin=subprocess.PIPE)
         cover = None
         for kind, k, t in frames:
-            if kind == "t":
+            if kind == "h":
+                im = hook_frame(spec, t)
+                if t >= 0.6 and cover is None:
+                    cover = im
+            elif kind == "t":
                 im = title_frame(bg, spec, t)
                 if t >= T_TITLE - 0.5 and cover is None:
                     cover = im
             elif kind == "f":
-                im = fact_frame(bg, spec, k, t)
+                im = fact_frame(bg, spec, k, t, anim)
             else:
                 im = end_frame(bg, spec, t)
             pr.stdin.write(im.tobytes())
